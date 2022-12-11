@@ -1,0 +1,22 @@
+My original dataset does not include a codebook, so I made one by myself. 
+However, I am not sure of the meaning of miss_diss_astronomical and I could not find it on the internet either.
+
+•     absolute_magnitude: a measure of the luminosity of a celestial object
+•	est_dia_in_km_max: estimated maximum diameter in kilometers of an asteroid 
+•	epoch_date_close_approach: the close approach date converted to epoch
+•	relative_velocity_km_per_hr: relative velocity of an asteroid on orbit in kilometers per hour
+•	miss_diss_astronomical: not sure
+•	orbit_uncertainity: the uncertainty of a perturbed orbital solution for an asteroid
+•	minimum_orbit_intersection: a measure used in astronomy to assess potential close approaches and 
+collision risks between an asteroid and the earth
+•	epoch_osculation: the osculating orbit of an asteroid in space at a given moment in time is 
+the gravitational Kepler orbit that it would have around its central body if perturbations were absent
+•	eccentricity:  dimensionless parameter that determines the amount by which its orbit around 
+another body deviates from a perfect circle
+•	semi_major_axis: half of the longest diameter of the orbit
+•	asc_node_longitude: the angle from a specified reference direction, called the origin of longitude, 
+to the direction of the ascending node, as measured in a specified reference plane
+•	perihelion_distance: the shortest distance between the Sun and the asteroid
+•	mean_anomaly: the angle between lines drawn from the Sun to the perihelion B and to a point 
+moving in the orbit at a uniform rate corresponding to the period of revolution of the asteroid
+•	hazardous: determines whether an asteroid is potentially hazardous to earth or not
