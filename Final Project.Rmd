@@ -1,0 +1,436 @@
+---
+title: "Final Project"
+author: "Lishan Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+## Overview
+The project consists of five major parts: **introduction, exploratory data analysis, modeling,  performance evaluation, and conclusion**. The introduction includes the basic strategy of modeling and some necessary information regarding the response variable. The EDA is divided into two subsections: data cleaning and data visualization. Importantly, **we did feature extraction by analyzing the covariance between variables** so we had a relatively small amount of predictors to work with in modeling. The process of modeling is fairly similar to what we did in the homework, so we will not repeat it here. In total, we fit six models: logistic regression, quadratic discriminant analysis, support vector machine with the radial kernel, classification tree, random forest, and boosted tree. For all three tree models, we did hyperparameter tuning and cross-validation. We evaluate the performance using accuracy and precision, **but precision is essentially more meaningful** since we have highly imbalanced data. The conclusion is a short summary of model performance and overall results but also includes my own perspective and experience when working on the project.
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/5.jpg")
+```
+
+
+# Introduction
+The purpose of this project is to build a machine-learning model that **predicts whether or not an asteroid will be potentially hazardous to earth** using the predictors such as its absolute magnitude, estimated diameter, relative velocity, etc. The data is downloaded from Kaggle, but the original source is the Center for Near-Earth Object Studies at NASA, a department specifically for computing asteroid and comet orbits and their odds of Earth impact.
+
+### Potentially hazardous object 
+Since we will be predicting whether an asteroid will be potentially hazardous or not, it is important to have some background information about it. **A potentially hazardous object (PHO) is a near-Earth object – either an asteroid or a comet – with an orbit that can make close approaches to the Earth and is large enough to cause significant regional damage in the event of an impact.** Though it seems to be scary, more than 99% of the known potentially hazardous objects would not be an impact threat over the next 100 years, if their orbits are reasonably well determined. The majority of these objects are potentially hazardous asteroids (PHA), while a few of them are comets. Though there are certain standards to determine whether an asteroid will be considered as PHA or not, it is beyond our consideration, as we are going to use given features from the data to predict the response. In other words, we do not want to know these standards beforehand such as which predictors are more important than others. Thus, our general assumption is that **we do not have any prior knowledge of PHA** except for some reasonable conjectures based on our elementary-level physics. 
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/1.jpg")
+```
+
+### Why is this model relevant?
+This model is important in the way that we could easily classify the objects to be PHA or not, using our information about these near-earth objects. According to NASA, there are over 30,000 near-earth asteroids, and it would be time-consuming to check more than 30 properties of each asteroid to determine if a given asteroid is PHA. For this reason, machine learning is an excellent approach to solving these kinds of problems, as algorithms tend to give quite accurate predictions in a relatively short amount of time. 
+
+
+
+# Exploratory Data Analysis
+Before modeling, the first thing we should do is assessing our data. Our dataset contains over 4000 observations and 40 variables without any missing values. In this case, we do not need to deal with missing data. Rather, data cleaning for variables is necessary. **We will first tide and manipulate our data before creating any visualizations to explore some potential relationships between variables.** One clarification I want to make is that this data does not have its code book, so the variable name gives all the information.
+
+### Loading Data and Packages
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE, cache=TRUE)
+```
+```{r}
+library(tidyverse) # loading packages
+library(tidymodels)
+library(janitor)
+library(ggplot2)
+library(rpart.plot)
+library(randomForest)
+library(vip)
+library(ranger)
+library(xgboost)
+library(corrplot)
+library(corrr)
+library(ggcorrplot)
+library(dplyr)
+library(klaR)
+tidymodels_prefer()
+pho<-read.csv("C:/Users/lisha/Downloads/nasa.csv") # read the data
+set.seed(403) # will be useful later in modelling 
+dim(pho) # 4687 40
+pho %>%
+  head(1)
+```
+
+Our data contains 4687 observations and 40 variables.
+
+### Data Cleaning
+Since we have a huge number of variables in the dataset, we want to exclude some of them such as variables that measure the same parameters in different units, or variables that have little covariance with the output like the names of asteroids or id. Since all the asteroids orbit around earth, it is not necessary to include this information. For the same reason, we do not need to include equinox. Moreover, we should also clean the names of the variables to for later modeling.
+```{r}
+pho<-pho %>%
+  clean_names() # clean the names of variables
+pho<-pho%>%
+  select(-est_dia_in_feet_max,-est_dia_in_feet_min,-est_dia_in_miles_max,-est_dia_in_miles_min,-est_dia_in_m_max,-est_dia_in_m_min,-close_approach_date,-relative_velocity_km_per_sec,-miss_dist_lunar,-miss_dist_miles,-miss_dist_kilometers,-perihelion_arg,-name,-neo_reference_id,-orbit_determination_date,-orbit_id,-orbiting_body,-equinox)
+```
+After excluding these variables, we now only have 22 variables including one output variable. We can now take a look at the covariance matrix to see if we need to further exclude some other variables.
+```{r}
+pho_cor<-pho%>%
+  select(-hazardous)%>%
+  cor()%>%
+  corrplot(tl.cex = 0.7)
+```
+
+From the graph, we see that some pairs of variables are strongly (positively or negatively) correlated such as minimum estimated diameter and maximum estimated diameter and we will just keep one of these pair variables. 
+```{r}
+pho_cor_new<-pho%>%
+  select(-est_dia_in_km_min,-miles_per_hour,-jupiter_tisserand_invariant,-orbital_period,-aphelion_dist,-perihelion_time,-mean_motion,-hazardous)%>%
+  cor() %>%
+  corrplot(tl.cex = 0.7)
+pho<-pho%>%
+  select(-est_dia_in_km_min,-miles_per_hour,-jupiter_tisserand_invariant,-orbital_period,-aphelion_dist,-perihelion_time,-mean_motion)
+
+```
+
+After we exclude these variables, our correlation plot looks much nicer and we now only have 15 variables to work with. We can then perform exploratory data analysis.
+
+### Visual EDA
+In this part, we are interested in the distribution of output variables and the distribution of some important predictors. Though we yet do not know which predictors are "important" to the response, we can still take a guess and focus on some of these variables. **If an asteroid were potentially hazardous to earth, it is likely that it would be very big (to survive passing through Earth's atmosphere), close to the earth, and has high velocity. The measure of magnitude can be related to variables such as estimated maximum diameters.** Its closeness to earth is relevant to variables like inclination, minimum orbit intersection distance ("a measure used in astronomy to assess potential close approaches and collision risks between astronomical objects. It is defined as the distance between the closest points of the osculating orbits of two bodies." -Wiki). Its velocity is already given in the dataset named relative velocity in kilometers per hour. The rest of the variables is connected to some properties of the orbit of any asteroid. I will provide a picture below to help my readers to understand. However, due to my limited understanding of the orbit, I am not sure how these variables can have some impact on the response variable, so I will not analyze them in this EDA. It is of course true that some of these variables greatly contribute to the response, but it is not easy for me to interpret why that is the case. Therefore, we will only consider some more interpretable variables in this EDA.
+
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/3.png")
+```
+
+```{r}
+ggplot(pho,aes(hazardous))+
+  geom_bar(color="red")+
+  labs(x="Potentially hazardous asteroid")+labs(title="Distribution of output variable")
+```
+
+It is now quite obvious that our output is imbalanced, meaning that when we do the modeling, **we need to stratify the output variable in order to achieve better results**. Moreover, this graph informs us that most of the asteroids are not hazardous to earth, so we do not need to worry about them. On the other hand, if there are some potentially hazardous asteroids, their impacts on earth can be huge. It is likely that some of them can cause dangerous tsunamis for example.
+
+```{r}
+hist(pho$est_dia_in_km_max,xlim = c(0,10),xlab="Distribution of estimated maximum diameter in kilometer",main="",col = "#ffeff1")
+ggplot(pho,aes(x=est_dia_in_km_max,y=hazardous))+geom_boxplot(color="blue",fill="lightgreen")+labs(
+    title = "Boxplot of estimated diameter by being hazardous or not")+ theme_minimal()
+```
+
+Most of the asteroids have their estimated maximum diameter between 0 and 1, however, there are a few asteroids that have extremely large diameters. Indeed, if we check the maximum value of the estimated diameter, the maximum is 34.83694 kilometers, which is amazingly large. For comparison, the diameter of the earth is 12,756 km, much larger than any of these asteroids. The diameter of the moon is 3,500 km, still much larger than that of the asteroids. However, due to the effect of outliers, it is hard to see from the boxplot whether the estimated diameter has any relationship with being potentially hazardous or not.
+
+```{r}
+ggplot(pho,aes(x=minimum_orbit_intersection,group=factor(hazardous),fill=factor(hazardous)))+geom_histogram(color="aquamarine")+labs(title="Histogram of minimum orbit intersection")+scale_fill_discrete(labels=c('TRUE', 'FALSE')) + guides(fill=guide_legend(title="Hazardous")) + theme_minimal()
+ggplot(pho,aes(x=minimum_orbit_intersection,y=hazardous))+geom_boxplot(color="firebrick",fill="gold1")+labs(title = "Boxplot of minimum orbit intersection by being hazardous or not")+ theme_minimal()
+```
+
+Most of the orbit intersections are between 0 and 0.1. If this value is large, it means that the distance between the closest points of the osculating orbits of the asteroid and Earth is large and thus is less likely to have a collision. On the other hand, if this value is small, it is more likely that the collision would happen. This is indeed true because if we see the boxplot, **all the potentially hazardous asteroids have very small minimum orbit intersections**.
+
+```{r}
+ggplot(pho,aes(x=inclination,group=factor(hazardous),fill=factor(hazardous)))+geom_histogram(color="yellow")+labs(title="Histogram of inclination")+scale_fill_discrete(labels=c('TRUE', 'FALSE')) + guides(fill=guide_legend(title="Hazardous")) + theme_minimal()
+ggplot(pho,aes(x=inclination,y=hazardous))+geom_boxplot(color="dark blue",fill="deeppink1")+labs(title = "Boxplot of inclination by being hazardous or not")+ theme_minimal()
+```
+
+Orbital inclination measures the tilt of an object's orbit around a celestial body. It is expressed as the angle between a reference plane and the orbital plane or axis of direction of the orbiting object. Small inclination indicates these asteroids are more aligned with the plan of Earth's orbit. Asteroids with lower-inclination orbits would be more likely to encounter Earth and easier to reach. From the graph, we can see that a great number of asteroids have lower-inclination (between 0 and 20 degrees). However, if we see the boxplot, because there are too many asteroids that have lower-inclination, the relationship between being potentially hazardous and inclination is unclear.
+
+```{r}
+ggplot(pho,aes(x=relative_velocity_km_per_hr,group=factor(hazardous),fill=factor(hazardous)))+geom_histogram(color="white")+labs(title="Histogram of relative velocity in km per hour")+theme_minimal()
+ggplot(pho,aes(x=relative_velocity_km_per_hr,y=hazardous))+geom_boxplot(color=" brown",fill="lightcyan")+labs(title = "Boxplot of relative velocity by being hazardous or not")+theme_minimal()
+```
+
+The relative velocity is the speed that an asteroid travels in its orbit. Many asteroids in our dataset travel around the earth. From the histogram, we see that most of the asteroids have relative velocities between 25000 to 10000 kilometer per hour. For comparison, the moon orbits Earth at a speed of 3683 kilometers per hour. Thus, the speed of asteroids is actually much faster might due to their relatively small magnitude. It is clear from the boxplot that **those asteroids which are considered potentially hazardous have higher velocity**. This result verifies our initial guess.
+
+# Setting Up Models
+After we did exploratory data analysis, we can begin modeling. Right now, we already have some general idea about our data, and we have found that some variables such as relative velocity, minimum orbit intersection, and estimated maximum diameter are closely related to the response variable. In our modeling, we will use all 15 variables to predict the response. Nonetheless, before modeling, **we should first split our data, build a recipe and make K-fold cross-validation sets**.
+
+### Data Splitting
+```{r}
+pho$hazardous<-factor(pho$hazardous,levels=c("True","False")) # initially hazardous is considered as a character type, so we want to convert it to factor type
+pho_split<-pho%>%
+  initial_split(pro=0.7,strata = hazardous)
+pho_train<-training(pho_split)
+pho_test<-testing(pho_split)
+dim(pho_train)
+dim(pho_test)
+```
+
+In our training set, we have in total 15 variables and 3280 observations. In our testing set, we have the same number of variables and 1407 observations. **We did the stratified sampling because our output variable is highly imbalanced, so this step is necessary**.
+
+
+### Recipe Building
+```{r}
+pho_recipe <-recipe(
+  hazardous~.,pho_train) %>%
+  step_dummy(all_nominal_predictors())%>% # dummy predictor on categorical variables
+  step_normalize() # this step is important because some of our variables are extremely small, while others are quite large.
+```
+### K-Fold Cross Validation
+Since our data is not too large, five folds should be enough. Because we will model random forest, if the folds are too many, it will take a very long time. The basic idea of cross validation is illustrated below. **Though this approach can be computationally expensive, we do not waste any data, which is a major advantage when our sample size is small**. 
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/6.png")
+```
+
+```{r}
+pho_folds<-vfold_cv(pho_train,v=5,strate=hazardous) # we stratify our data for the same reason
+```
+
+# Model Building 
+The modeling procedure is similar to lab and homework, so we will not discuss too many technical details. We will fit six models: **logistic regression, quadratic discriminant analysis, support vector machine with the radial kernel, classification tree, random forest, and boosted tree**. We will do hyperparameter tuning for all three tree-based models, and cross-validation for five models except support vector machine due to time cost. Every model shares the same recipe but has a different workflow, tuning grid (if needed), and engine. For evaluation, we will use **confusion matrix, accuracy, and precision**. Precision will be weighted more heavily due to the imbalance of response variables. We expect to see (non-parametric) tree-based models perform better than (parametric) logisitc regression and quadratic discriminant analysis. Since we did not cover the support vector machine carefully in class, it is unclear of its performance in general. We hope that the best model can have metric of precision of around 0.9 on the testing set. Let us start working! 
+
+### Logistic Regression
+Because logistic regression does not require any tuning, we simply fit the model and do cross-validation on the training set.
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/log.png")
+```
+
+```{r}
+log_reg <-logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
+log_wkflow<-workflow() %>%
+  add_model(log_reg)%>%
+  add_recipe(pho_recipe)
+log_fit_res<-tune_grid(
+  object=log_wkflow,
+  resamples=pho_folds # for cross-validation
+  )
+log_fit<-fit(log_wkflow,pho_train)
+augment(log_fit,new_data=pho_train) %>%
+  conf_mat(truth=hazardous,estimate=.pred_class)%>%
+  autoplot(type="heatmap")
+log_acc<-augment(log_fit,new_data=pho_train)%>%
+  accuracy(truth=hazardous,estimate=.pred_class)
+print(log_acc) # Accuracy is 0.9579
+log_precision<-augment(log_fit,pho_train)%>%
+  precision(hazardous,.pred_class) # Precision is 0.872137
+print(log_precision)
+```
+
+We see from the above that even the logistic regression does a good job of predicting whether an asteroid is hazardous or not. The accuracy is 0.9579, and the precision is 0.872137. Notice that since the output variable is greatly imbalanced, precision is actually a better metric than accuracy because a false negative does not give us too much information given the fact of the majority of the response is false. This performance, in general, shows that the response is not difficult to predict using the given predictors. We expect that all the following models to achieve even better performance.
+
+### Quadratic Discriminant Analysis
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/dis1.png")
+```
+```{r}
+library(MASS)
+library(discrim) # for quadratic discriminant analysis
+qda_mod<-discrim_quad()%>%
+  set_mode("classification")%>%
+  set_engine("MASS")
+qda_wkflow<-workflow()%>%
+  add_model(qda_mod)%>%
+  add_recipe(pho_recipe)
+qda_fit<-fit(qda_wkflow,pho_train)
+augment(qda_fit,new_data=pho_train) %>%
+  conf_mat(truth=hazardous,estimate=.pred_class)%>%
+  autoplot(type="heatmap")
+qda_acc<-augment(qda_fit,new_data=pho_train)%>%
+  accuracy(truth=hazardous,estimate=.pred_class)
+print(qda_acc) # Accuracy is 0.9646341	
+qda_precision<-augment(qda_fit,pho_train)%>%
+  precision(hazardous,.pred_class) # Precision is 0.8503401	
+print(qda_precision)
+```
+This model performs similarly to logistic regression. We see a slight improvement in accuracy but the precision is lower. Honestly, both two models perform fairly well. However, since the precision of the two models is around 0.85, we can try to improve this to 0.9 or even higher using other models.
+
+### Support Vector Machine
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/svm.png")
+```
+```{r}
+library(kernlab)
+svm_rbf_spec <- svm_rbf() %>%
+  set_mode("classification") %>%
+  set_engine("kernlab", scaled = FALSE)
+svm_rbf_fit <- svm_rbf_spec %>% 
+  fit(hazardous ~ ., data=pho_train)
+mtx<-augment(svm_rbf_fit, new_data = pho_train) %>%
+  conf_mat(truth = hazardous, estimate = .pred_class)%>%
+  autoplot(type="heatmap")
+svm_acc<-augment(svm_rbf_fit,new_data=pho_train)%>%
+  accuracy(truth=hazardous,estimate=.pred_class)
+print(svm_acc) # Accuracy is 0.8390244	
+svm_precision<-augment(svm_rbf_fit,pho_train)%>%
+  precision(hazardous,.pred_class) # Precision is NA
+print(svm_precision)
+```
+First thing I want to clarify is that I did not use hyperparameter tuning for the reason that it was too time-consuming. Even if I set up the level to be 4, it was still running for 7 hours, and cannot finish plotting. I used hyperparameter tuning for all the following tree-based models, so I hope that is okay. Moreover, linear SVM did not perform well when I  first tried, so I later changed to SVM with a radial basis function. Nevertheless, we can see that the result is still poor and the worst part is that we do not even have a precision value, as our true positive and false positive are both zero in SVM's prediction. I was trying to think why this happened, and I googled to see how other people fitted the model. **It turns out that SVM performs poorly in imbalanced datasets and unfortunately my dataset is extremely imbalanced.** This is probably the reason why the positive and false positives are both zero, **as SVM cannot distinguish asteroids that are potentially hazardous from this highly imbalanced data**. I am actually surprised to find out that SVM did so bad given the fact that even logistic regression can have relatively high precision.
+
+### Classification Tree Model
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/ct.png")
+```
+```{r}
+pho_tree_spec <-decision_tree() %>%
+  set_engine("rpart")
+pho_class_tree_spec <- pho_tree_spec %>%
+  set_mode("classification")
+pho_class_tree_wkflow <- workflow() %>%
+  add_model(pho_class_tree_spec %>% set_args(cost_complexity=tune())) %>% # for hyperparameter-tuning
+  add_formula(hazardous~.)
+pho_param_grid <-grid_regular(cost_complexity(range=c(-3,-1)),levels=10)
+pho_class_tree_res <-tune_grid(
+  pho_class_tree_wkflow,
+  resamples=pho_folds,
+  grid=pho_param_grid,
+  metrics=metric_set(roc_auc)) # for cross-validation
+autoplot(pho_class_tree_res)
+best_class_tree_complexity <-select_best(pho_class_tree_res)
+collect_metrics(pho_class_tree_res) %>% arrange(-mean)
+```
+From the autoplot of cost complexity parameter, it seems to be the case that smaller cost complexity yields better result. The highest roc_auc is 0.9957344, which is amazingly good.
+```{r}
+class_tree_final<-finalize_workflow(pho_class_tree_wkflow,best_class_tree_complexity)
+class_tree_final_fit<-fit(class_tree_final,data=pho_train)
+augment(class_tree_final_fit,new_data=pho_train) %>%
+  conf_mat(truth=hazardous,estimate=.pred_class)%>%
+  autoplot(type="heatmap")
+class_tree_acc<-augment(class_tree_final_fit,new_data=pho_train)%>%
+  accuracy(truth=hazardous,estimate=.pred_class)
+print(class_tree_acc) # Accuracy is 0.9960366	
+class_tree_precision<-augment(class_tree_final_fit,pho_train)%>%
+  precision(hazardous,.pred_class) # Precision is 0.9923518
+print(class_tree_precision)
+class_tree_final_fit %>%
+  extract_fit_engine()%>%
+  rpart.plot()
+```
+
+Using classification model, we already had excellent result. After selecting the best cost complexity, our model now has accuracy 0.9960366, and precision 0.9923518. Compared to linear models such as logistic regression and quadratic discriminant analysis, we had huge improvement on both accuracy and precision. The improvement on precision is especially important because now we almost never misclassify true positive. The reason why we can have such outstanding performance is because, again, our response is relatively easy to predict using the given features, **which can be verified in our best-performing pruned decision tree**. 
+
+### Random Forest Model
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/rf.png")
+```
+```{r,cache=TRUE}
+pho_rf_spec<-rand_forest() %>%
+  set_engine("ranger",importance="impurity")%>%
+  set_mode("classification")
+pho_rf_Wkflow<-workflow()%>%
+  add_model(pho_rf_spec %>% set_args(mtry=tune(),trees=tune(),min_n=tune()))%>%
+  add_formula(hazardous~.)
+param_grid_rf<-grid_regular(mtry(range= c(1,8)),trees(range = c(10,200)),min_n(range = c(2,20)),levels = 8)
+pho_res_rf <-tune_grid(
+  pho_rf_Wkflow,
+  resample=pho_folds,
+  grid=param_grid_rf,
+  metrics=metric_set(roc_auc)
+)
+autoplot(pho_res_rf)
+```
+
+Compared to the roc_auc plot in homework 6, this plot is quite different. The first thing I notice is that the number of randomly selected predictors does not have a crucial impact on the roc_auc. Though if only one predictor is selected, the roc_auc is generally the lowest. If, however, at least two predictors are selected, then it is hard to tell the difference of roc_auc. The minimal node size, similarly, does not yield a huge difference. However, it tends to be the case that when the minimal node size is relatively large, we see better roc_auc. Lastly, we check the influence of the number of trees.When the tree size is small, the roc_auc is noticeably lower in all the graphs. When the tree size is above 100, the difference of roc_auc is not substantial. **Among all the tree hyperparameters, the number of trees seems to be the most important factor that determines the performance**.
+```{r,cache=TRUE}
+library(vip)
+collect_metrics(pho_res_rf) %>% arrange(-mean)
+best_complexity_rf<-select_best(pho_res_rf)
+rf_final<-finalize_workflow(pho_rf_Wkflow,best_complexity_rf)
+rf_final_fit<-fit(rf_final,data=pho_train)
+rf_final_fit %>%
+  extract_fit_engine()%>%
+  vip()
+```
+
+The variable importance plot helps us verify if our initial conjecture regarding the variables are correct or not. Indeed, we found that minimum orbit intersection seems to be the most significant variable to response, estimated maximum diameter and absolute magnitude are the other two important variables. Though I did guess that the estimated maximum diameter to be relevant,**I did not consider absolute magnitude to be important for the reason that absolute magnitude is a measure of luminosity of a celestial object, which does not seem to be connected to the response**. According to a report from NASA, "the discovery that many potentially hazardous asteroids tend to be bright says something about their composition; they are more likely to be either stony, like granite, or metallic. The composition of the bodies would affect how quickly they might burn up in our atmosphere if an encounter were to take place." I personally think this discovery is quite inspiring, because I never thought about how luminosity can be related to composition of asteroids. Moreover, **if we compare this variance plot and the plot of best-performing pruned decision tree, we can find that these two plots match pretty well**. They all consider minimum orbit intersection and absolute magnitude to be significant variables.
+
+```{r,cache=TRUE}
+collect_metrics(pho_res_rf) %>% arrange(-mean)
+best_complexity_rf<-select_best(pho_res_rf)
+rf_final<-finalize_workflow(pho_rf_Wkflow,best_complexity_rf)
+rf_final_fit<-fit(rf_final,data=pho_train)
+augment(rf_final_fit,new_data=pho_train) %>%
+  conf_mat(truth=hazardous,estimate=.pred_class)%>%
+  autoplot(type="heatmap")
+rf_acc<-augment(rf_final_fit,new_data=pho_train)%>%
+  accuracy(truth=hazardous,estimate=.pred_class)
+print(rf_acc) # Accuracy is 0.9993902	
+rf_precision<-augment(rf_final_fit,pho_train)%>%
+  precision(hazardous,.pred_class) # Precision is 0.9924386	
+print(rf_precision)
+```
+It is unsurprising that random forest performs very well and it even outperforms the classification tree model. Excitingly, our roc_auc is 0.9998183, accuracy is 0.9993902 and our precision is 0.9924286. We have only 2 true negative and 1 false positive. This result is nearly perfect, because we already had close to 1 precision. Compared to classification tree model, we still see significantly improvement on every metric. The next step we do is to fit the boosted tree, but we will likely get similar results. I doubt that boosted tree can perform better.
+
+### Boosted Tree Model
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/boost2.png")
+```
+```{r,cache=TRUE}
+pho_boost_spec<-boost_tree()%>%
+  set_engine("xgboost")%>%
+  set_mode("classification")
+pho_boost_Wkflow<-workflow()%>%
+  add_model(pho_boost_spec %>% set_args(trees=tune()))%>%
+  add_formula(hazardous~.)
+param_grid_boost<-grid_regular(trees(range = c(10,2000)),levels = 10)
+tune_res_boost <-tune_grid(
+  pho_boost_Wkflow,
+  resample=pho_folds,
+  grid=param_grid_boost,
+  metrics=metric_set(roc_auc)
+)
+autoplot(tune_res_boost)
+```
+
+We achieve the best result when the number of trees is around 200. It seems that when we first increase the tree size, the roc_auc improves significantly. However, when the number of trees exceeds 500, the roc_auc is relatively low. It is worth mentioning that even though we see great improvement from the graph, the difference of best roc_auc and worst is just 0.0003, meaning that our model did very well in all cases.
+```{r,cache=TRUE}
+collect_metrics(tune_res_boost)%>%arrange(-mean)
+best_tree_boost<-select_best(tune_res_boost)
+boost_final<-finalize_workflow(pho_boost_Wkflow,best_tree_boost)
+boost_final_fit<-fit(boost_final,data=pho_train)
+augment(boost_final_fit,new_data=pho_train) %>%
+  conf_mat(truth=hazardous,estimate=.pred_class)%>%
+  autoplot(type="heatmap")
+boost_acc<-augment(boost_final_fit,new_data=pho_train)%>%
+  accuracy(truth=hazardous,estimate=.pred_class)
+print(boost_acc) # Accuracy is 1
+boost_precision<-augment(boost_final_fit,pho_train)%>%
+  precision(hazardous,.pred_class) # Precision is 1
+print(boost_precision)
+```
+
+Wow! It is credible that boosted tree even performs better than random forest. **Our accuracy and precision are both 1!** In other words, our boosted tree never misclassfies any observation. I am really amazed by the power of machine learning. I understand that the response variable is unchallenging to predict, but it is not easy to correctly predict more than three thousand observations! I am very curious if this model can have the same accuracy and precision in the testing data.
+
+# Overall Performance of Each Model
+### Accuracy
+```{r,cache=TRUE}
+library(dbplyr)
+acc_tab<-matrix(c(0.8390244,0.9579268	,0.9646341, 0.9960366	,0.9978659,1),ncol=1,byrow=TRUE)
+colnames(acc_tab)<-"accuracy"
+rownames(acc_tab)<-c("support vector machine","quadratic discriminant analysis","logistic regression","classification tree","random forest","boosted tree")
+print(acc_tab)
+```
+Even though the accuracy seems to be high for all models, it is important to understand that accuracy cannot evaluate the overall performance of models due to imbalance of output variable. **One good example is that though support vector machine fails to distinguish any positive output, it still has nearly 0.84 accuracy due to the large amount of false negatives.** Thus, precision is a better metric for evaluation, which we will use in the next step.
+
+### Precision
+```{r,cache=TRUE}
+precision_tab<-matrix(c(svm_precision$.estimate,qda_precision$.estimate,log_precision$.estimate,class_tree_precision$.estimate,rf_precision$.estimate,boost_precision$.estimate),ncol=1,byrow=TRUE)
+colnames(precision_tab)<-"precision"
+rownames(precision_tab)<-c("support vector machine","quadratic discriminant analysis","logistic regression","classification tree","random forest","boosted tree")
+print(precision_tab)
+
+```
+We can see clearly how different models improve our precision in this graph. Linear and quadratic models in general did relatively well, but tree-based models performed even better. Boosted tree is the winner among all six models for its perfect accuracy and precision. 
+
+# Analysis of The Test Set Using Boosted Tree 
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/win4.png")
+```
+```{r}
+augment(boost_final_fit,new_data=pho_test) %>%
+  conf_mat(truth=hazardous,estimate=.pred_class)
+boost_acc<-augment(boost_final_fit,new_data=pho_test)%>%
+  accuracy(truth=hazardous,estimate=.pred_class)
+print(boost_acc) # Accuracy is 0.9978678	
+boost_precision<-augment(boost_final_fit,pho_test)%>%
+  precision(hazardous,.pred_class) # Precision is 0.9912281	
+print(boost_precision)
+```
+
+After we fit the model to the training set, we evaluate its performance on the testing set. From the confusion matrix, we can see that it only has two false positive and one false positive outcomes. Our precision is 0.9912281! This is certainly a huge success and it also means that boosted tree is in general a great model for prediction. Well done!
+
+# Conclusion
+Since I already provided a detailed analysis for each model above, I will simply summarize the results. The logistic regression and quadratic discriminant analysis have similar performance in terms of their accuracy and precision. Since the response is relatively easy to predict, the precision is around 0.85 for both models. **We emphasize the importance of precision instead of accuracy because our response variable is highly imbalanced**. For this same reason, we stratified the response variable in initial splitting and fold splitting. Support vector machine essentially failed the mission of prediction as the algorithm generally does not do well in dealing with imbalanced data. Also, we did not perform hyperparameter tuning for the support vector machine because of its huge time consumption. In terms of tree-based models, all three models had excellent performance in both accuracy and precision. In particular, boosted tree is the best among all six models and has successfully predicted all the observations in the training set. **In addition to that, boosted tree reached 0.9912281 precision in the testing set, which is really incredible**. 
+
+I did not initially expect my models to be so successful in predicting the response. As I said in the introduction, there are indeed some general standards regarding how to classify whether an asteroid is potentially hazardous or not. However, because the machine we trained on does not really know these standards, it learned from the data and managed to predict the response with extremely high prediction. **I am impressed by machine learning capability and I believe that machine learning will be significantly useful in many fields due to its learning capability**. In fact, NASA already found how these data and models could be useful for future space exploration. For example, there are a great number of low-inclination asteroids as we have shown in EDA, researchers have found that because these objects are close to the earth, they can provide the best opportunities for human and robotic exploration in the next generation. 
+
+Though my model is quite simple, it can already classify thousands of asteroids to be PHA or not in a very short amount of time, greatly reducing the time cost for PHA classification. As I was working with the data, I found that modeling was not the most difficult part. **The real challenges are feature extraction and EDA**. By doing feature extraction and EDA, I familiarize myself with the meaning of each variable and how these variables may be related to each other. The success of modeling not only means precise prediction but also the interpretability of predictors to the response. It turns out that we can still somehow interpret the results using a variable importance plot and best-pruned decision tree plot. By interpreting the model, I also improved my understanding of the data. Every step is meaningful and I am glad that we have enough practice from labs and homework so the modeling becomes less challenging. **I am looking forward to working with more astronomical datasets in the future and hoping to apply more machine-learning algorithms in astronomy and cosmology.** This is my major research interest and I already applied for Ph.D. programs related to this area. 
+```{r}
+knitr::include_graphics("C:/Users/lisha/Downloads/4.jpg")
+```
+
+
